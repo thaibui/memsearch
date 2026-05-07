@@ -6,7 +6,7 @@
 |-------|-------------------|
 | **Session starts** | Clean up orphaned processes, start watch (Server) or one-time index (Lite), write session heading, check for updates |
 | **Each prompt** | No injected hint; memory recall stays explicit |
-| **Each turn ends** | Conversation summarized via `codex exec` (async) and saved to daily `.md` |
+| **Each turn ends** | The captured turn is submitted to the centralized summary service and the returned summary is saved to daily `.md` |
 
 ---
 
@@ -17,7 +17,7 @@ The Codex plugin uses 3 shell hooks (Codex does not have a `SessionEnd` hook):
 | Hook | Type | Async | Timeout | What It Does |
 |------|------|-------|---------|-------------|
 | **SessionStart** | command | no | 30s | Cleanup orphans, bootstrap memsearch, start watch/index, write session heading |
-| **Stop** | command | **yes** | 30s | Summarize the last turn via `codex exec`, using a rollout transcript when available and `history.jsonl` + `last_assistant_message` otherwise |
+| **Stop** | command | no | 30s | Parse the last turn, submit it to the shared summary service, append the returned summary, and index the updated memory file |
 
 ### Hook Lifecycle
 
@@ -84,26 +84,21 @@ For real-time indexing without lock issues, use [Milvus Server or Zilliz Cloud](
 
 ## Stop Hook -- Capture
 
-The Stop hook is the core capture mechanism. It runs **asynchronously** after each Codex response, returning `{}` immediately so the user can continue working.
+The Stop hook is the capture entrypoint. It turns the current Codex turn into a JSON payload, submits that payload to the shared `memsearch serve` service, appends the returned summary to the daily memory file, and re-indexes the updated markdown.
 
 ```mermaid
 graph TD
     A[Stop hook fires] --> B{Recursion guard}
-    B -->|"stop_hook_active=true"| Z[Skip — return empty JSON]
-    B -->|First call| C{API key available?}
-    C -->|No| Z
-    C -->|Yes| D{transcript_path available?}
-    D -->|Yes| E["parse-rollout.sh<br/>Extract last turn"]
-    D -->|No| E2["history.jsonl + last_assistant_message<br/>Recover latest user turn"]
-    E --> F{"codex exec available?"}
-    E2 --> F
-    F -->|Yes| G["codex exec --ephemeral<br/>-s read-only -c features.codex_hooks=false<br/>-m gpt-5.1-codex-mini"]
-    F -->|No| H["Local fallback<br/>Truncate raw text"]
-    G --> I["Append to YYYY-MM-DD.md<br/>with rollout anchors"]
-    H --> I
-    I --> J{Server mode?}
-    J -->|Yes| K["memsearch index"]
-    J -->|No (Lite)| L[Skip re-index]
+    B -->|"stop_hook_active=true"| Z[Skip]
+    B -->|First call| C{transcript_path available?}
+    C -->|Yes| D["parse-rollout.sh<br/>Extract last turn"]
+    C -->|No| E["history.jsonl + last_assistant_message<br/>Recover latest user turn"]
+    D --> F["Build turn payload"]
+    E --> F
+    F --> G["memsearch submit-turn<br/>POST to shared service"]
+    G --> H["Shared summarizer<br/>(remote or local service)"]
+    H --> I["Append summary to YYYY-MM-DD.md"]
+    I --> J["memsearch index"]
 ```
 
 ### Payload Compatibility
@@ -115,33 +110,7 @@ The plugin handles both cases:
 - If `transcript_path` exists, it parses the rollout with `parse-rollout.sh` and keeps the richer rollout anchor for L3 drill-down.
 - If `transcript_path` is missing, it falls back to the latest matching user prompt in `~/.codex/history.jsonl` plus `last_assistant_message`.
 
-This keeps memory capture working on current Codex releases, but rollout drill-down is now **best-effort** rather than guaranteed.
-
-### Codex exec Isolation
-
-The Stop hook calls `codex exec` for LLM summarization. To prevent **hook recursion** (the summarization call triggering another Stop hook), it disables hooks in the child process:
-
-```bash
-MEMSEARCH_NO_WATCH=1 \
-  codex exec --ephemeral --skip-git-repo-check -s read-only \
-  -c features.codex_hooks=false \
-  -c model_reasoning_effort='"low"' \
-  -m gpt-5.1-codex-mini "$LLM_PROMPT"
-```
-
-This avoids assuming `~/.codex/auth.json` exists. Installations that authenticate through Codex's default keyring flow still work, and the child `codex exec` cannot recurse because hooks are disabled explicitly.
-
-### Local Fallback
-
-If `codex exec` is unavailable or returns empty output, the hook falls back to raw text truncation:
-
-```bash
-# Fallback: use raw user question + Codex response (truncated to 800 chars)
-SUMMARY="- User asked: ${USER_QUESTION}
-- Codex: ${TRUNCATED_MSG}"
-```
-
-This ensures memory capture works even when the summarization model is unavailable or Codex omits the rollout transcript path.
+The central service owns the actual summarization model and prompt. The hook only needs the captured turn text and metadata.
 
 ---
 
@@ -234,8 +203,8 @@ When the `rollout:` anchor is populated, the memory-recall skill can use `parse-
 | Aspect | Codex Plugin | Claude Code Plugin |
 |--------|-------------|-------------------|
 | **SessionEnd hook** | Not available -- orphans cleaned at next SessionStart | Available -- clean shutdown |
-| **Summarizer** | `codex exec -m gpt-5.1-codex-mini` | `claude -p --model haiku` |
-| **Recursion prevention** | `features.codex_hooks=false` on child `codex exec` | `stop_hook_active` flag + `CLAUDECODE=` |
+| **Summarizer** | `memsearch serve` (shared service) | `claude -p --model haiku` |
+| **Recursion prevention** | Not needed for summarization | `stop_hook_active` flag + `CLAUDECODE=` |
 | **Skill context** | Main context (no `context: fork`) | Forked subagent (`context: fork`) |
 | **Milvus Lite** | One-time index + skip re-index in Stop | Same approach via `start_watch()` logic |
 | **Auto-install** | Bootstrap installs `uv` if missing | Requires pre-installed memsearch |
@@ -249,8 +218,8 @@ When the `rollout:` anchor is populated, the memory-recall skill can use `parse-
 plugins/codex/
 ├── hooks/
 │   ├── common.sh                   # Shared setup: JSON helpers, process management, orphan cleanup
-│   ├── session-start.sh            # SessionStart: bootstrap, watch/index
-│   ├── stop.sh                     # Stop: async capture via codex exec, local fallback
+│   ├── session-start.sh            # SessionStart: bootstrap, watch/index, flush queued summaries
+│   ├── stop.sh                     # Stop: capture turn, submit to shared summary service
 ├── skills/
 │   └── memory-recall/
 │       └── SKILL.md                # Memory recall skill ($memory-recall)
@@ -263,8 +232,8 @@ plugins/codex/
 | File | Purpose |
 |------|---------|
 | `common.sh` | Shared library sourced by all hooks. Includes JSON helpers (`_json_val`, `_json_encode_str`), memsearch detection, watch/index singleton management, and `cleanup_orphaned_processes()` for Codex's missing SessionEnd. |
-| `session-start.sh` | Bootstrap memsearch, start watch (Server) or one-time index (Lite), write session heading, check for updates. |
-| `stop.sh` | Async capture: summarize via `codex exec` with hooks disabled, using `parse-rollout.sh` when Codex provides a rollout path and `history.jsonl` + `last_assistant_message` otherwise. Falls back to raw text if `codex exec` fails. |
+| `session-start.sh` | Bootstrap memsearch, start watch (Server) or one-time index (Lite), write session heading, flush queued summaries, check for updates. |
+| `stop.sh` | Capture turn metadata and transcript text, submit to the shared summary service, append the returned summary to the daily memory file, and re-index the updated markdown. |
 | `SKILL.md` | Memory recall skill with `__INSTALL_DIR__` placeholder (resolved at install time). Includes direct file read fallback for L2 in case `memsearch expand` hits sandbox restrictions. |
 | `install.sh` | One-click installer: checks/installs memsearch, copies the skill, installs or updates memsearch hook entries in `hooks.json`, and enables the experimental hooks feature flag. |
 | `parse-rollout.sh` | Parses Codex rollout JSONL files, extracting the last user message through EOF with role labels. |

@@ -5,6 +5,7 @@ Semantic memory search for [OpenCode](https://github.com/anomalyco/opencode) —
 ## Features
 
 - **Auto-capture**: Summarizes each conversation turn and saves to daily `.md` files
+- **Centralized summarization**: Each turn is submitted to the shared memsearch service, so the LLM work runs once for all clients
 - **Semantic search**: Hybrid search (BM25 + dense vectors + RRF) via Milvus
 - **Three-layer recall**: Search → Expand → Transcript (progressive detail)
 - **Per-project isolation**: Each project gets its own Milvus collection
@@ -127,8 +128,8 @@ Each file contains timestamped entries with bullet-point summaries:
 ### 14:30
 <!-- session:ses_abc123 db:~/.local/share/opencode/opencode.db -->
 - User asked about the authentication flow.
-- Assistant explained the OAuth2 implementation in auth.ts.
-- Assistant modified the token refresh logic in refresh.ts.
+- OpenCode explained the OAuth2 implementation in auth.ts.
+- OpenCode modified the token refresh logic in refresh.ts.
 ```
 
 ## Configuration
@@ -143,7 +144,7 @@ export OPENAI_API_KEY=sk-...
 
 ## How It Works
 
-1. **Capture**: After each conversation turn, the plugin extracts the user+assistant exchange, summarizes it via LLM, and appends to a daily markdown file.
+1. **Capture**: After each conversation turn, the plugin extracts the user+assistant exchange and submits it to the shared summary service, which returns bullet-point notes that are appended to a daily markdown file.
 
 2. **Index**: The markdown files are indexed by memsearch into a Milvus collection (Milvus Lite by default, runs in-process).
 

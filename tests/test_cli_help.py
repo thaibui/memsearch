@@ -24,6 +24,9 @@ from memsearch.cli import cli
         pytest.param(["reset", "--help"], "Usage:", id="reset-help"),
         pytest.param(["watch", "--help"], "Usage:", id="watch-help"),
         pytest.param(["compact", "--help"], "Usage:", id="compact-help"),
+        pytest.param(["serve", "--help"], "Usage:", id="serve-help"),
+        pytest.param(["submit-turn", "--help"], "Usage:", id="submit-turn-help"),
+        pytest.param(["flush-turns", "--help"], "Usage:", id="flush-turns-help"),
         pytest.param(["--version"], "version", id="version"),
     ],
 )

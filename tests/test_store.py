@@ -95,6 +95,31 @@ def test_upsert_is_idempotent(store: MilvusStore):
     assert hashes.count("same_hash") == 1
 
 
+def test_upsert_flushes_collection(store: MilvusStore, monkeypatch: pytest.MonkeyPatch):
+    calls: list[tuple[tuple, dict]] = []
+    original_flush = store._client.flush
+
+    def wrapped_flush(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(store._client, "flush", wrapped_flush)
+
+    chunk = {
+        "embedding": [1.0, 0.0, 0.0, 0.0],
+        "content": "Flush check",
+        "source": "test.md",
+        "heading": "",
+        "chunk_hash": "flush-check",
+        "heading_level": 0,
+        "start_line": 1,
+        "end_line": 1,
+    }
+    store.upsert([chunk])
+
+    assert calls, "MilvusStore.upsert should flush the collection after writes"
+
+
 def test_hybrid_search(store: MilvusStore):
     chunks = [
         {

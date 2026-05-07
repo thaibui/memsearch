@@ -44,9 +44,9 @@ memsearch search "test" --collection test_warmup 2>/dev/null; memsearch reset --
 
 | When | What |
 |------|------|
-| Session starts | Recent memory context is injected; you'll see `[memsearch v...]` in the status line |
+| Session starts | Pending turn summaries are flushed and the watcher/indexer are started |
 | Each prompt | No injected hint; memory recall remains explicit |
-| Each turn ends | The conversation is summarized and saved to a daily `.md` file |
+| Each turn ends | The turn is submitted to the shared summary service and the returned summary is saved to a daily `.md` file |
 
 ### Search past memories
 

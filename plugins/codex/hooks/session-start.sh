@@ -114,6 +114,11 @@ if [ "$KEY_MISSING" = true ]; then
   exit 0
 fi
 
+# Flush any queued turn summaries before the session starts.
+if memsearch_available; then
+  _memsearch flush-turns "$MEMORY_FILE" >/dev/null 2>&1 || true
+fi
+
 # Start memsearch watch (Server mode) or do one-time index (Lite mode).
 start_watch
 

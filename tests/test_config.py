@@ -31,6 +31,8 @@ def test_default_config():
     assert cfg.chunking.overlap_lines == 2
     assert cfg.watch.debounce_ms == 1500
     assert cfg.compact.llm_provider == "openai"
+    assert cfg.summary_service.url == "http://127.0.0.1:37777"
+    assert cfg.summary_service.timeout_ms == 120000
 
 
 def test_load_toml_file(tmp_path: Path):
@@ -329,6 +331,20 @@ def test_compact_config_set_get_roundtrip(tmp_path: Path, monkeypatch: pytest.Mo
     cfg = resolve_config()
     assert get_config_value("compact.base_url", cfg) == "https://custom-llm.example.com"
     assert get_config_value("compact.api_key", cfg) == "sk-custom-123"
+
+
+def test_summary_service_config_set_get_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """set_config_value + get_config_value should work for summary_service settings."""
+    cfg_path = tmp_path / "config.toml"
+    monkeypatch.setattr("memsearch.config.GLOBAL_CONFIG_PATH", cfg_path)
+    monkeypatch.setattr("memsearch.config.PROJECT_CONFIG_PATH", tmp_path / "nope.toml")
+
+    set_config_value("summary_service.url", "http://summaries.local:37777")
+    set_config_value("summary_service.timeout_ms", "150000")
+
+    cfg = resolve_config()
+    assert get_config_value("summary_service.url", cfg) == "http://summaries.local:37777"
+    assert get_config_value("summary_service.timeout_ms", cfg) == 150000
 
 
 def test_dict_to_config_ignores_unknown_fields_and_non_dict_sections() -> None:

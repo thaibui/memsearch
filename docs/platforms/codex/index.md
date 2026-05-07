@@ -14,6 +14,7 @@ memsearch fills this gap with a shell-hook-based plugin that gives Codex the sam
 - **Same architecture as the Claude Code plugin** -- if you're familiar with one, you understand both
 - **Cross-platform portability** -- memories captured in Codex are searchable from Claude Code, OpenClaw, or OpenCode
 - **ONNX embedding default** -- no OpenAI API key needed for the memory system itself (Codex uses OpenAI for the agent, but memsearch's embeddings are independent)
+- **Centralized turn summarization** -- Codex submits each captured turn to `memsearch serve`, which handles the summary model once for all clients
 
 ---
 
@@ -22,7 +23,7 @@ memsearch fills this gap with a shell-hook-based plugin that gives Codex the sam
 Codex CLI runs in a sandboxed environment by default. The memsearch plugin requires file system access to write memory files and run the `memsearch` CLI. The recommended approach:
 
 - **Install option**: The `install.sh` script configures `hooks.json` which works in any mode
-- **Stop hook isolation**: The Stop hook uses `codex exec --ephemeral -s read-only -c features.codex_hooks=false` so summarization reuses normal auth without recursing into hooks
+- **Centralized summarization**: The Stop hook submits each captured turn to `memsearch serve`, which performs the LLM summarization once for all clients
 
 If you experience issues with the Stop hook in strict sandbox mode, see [Troubleshooting](../../platforms/claude-code/troubleshooting.md) for diagnostic steps.
 
@@ -30,13 +31,13 @@ If you experience issues with the Stop hook in strict sandbox mode, see [Trouble
 
 ## Key Features
 
-- **Automatic capture** -- conversations summarized via `codex exec` using `gpt-5.1-codex-mini` after each turn
+- **Automatic capture** -- conversations submitted to the shared summary service after each turn
 - **Best-effort rollout drill-down** -- search and expand always work, with original rollout parsing available when Codex includes rollout anchors ([details](memory-recall.md))
 - **Shell hook architecture** -- similar to [Claude Code plugin](../claude-code/index.md), easy to understand and modify
 - **Orphan cleanup** -- handles missing `SessionEnd` hook gracefully (Codex doesn't have one)
 - **Milvus Lite lock handling** -- automatically detects Milvus backend and skips concurrent index operations in Lite mode
 - **ONNX embedding by default** -- no API key required, runs locally on CPU
-- **Local summarization fallback** -- if `codex exec` fails, falls back to truncated raw text
+- **Shared summary service** -- keeps LLM work centralized instead of running a per-session summarizer
 
 ---
 

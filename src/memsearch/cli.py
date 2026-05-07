@@ -21,6 +21,18 @@ from .config import (
     save_config,
     set_config_value,
 )
+from .summary_service import serve_summary_service
+from .turns import (
+    append_summary_entry,
+    canonical_job_id,
+    derive_spool_dir,
+    job_paths,
+    load_json,
+    load_payload,
+    mark_job_done,
+    post_turn_summary,
+    write_pending_job,
+)
 
 try:
     from pymilvus.exceptions import MilvusException
@@ -110,6 +122,54 @@ def _normalize_compact_source(source: str | None) -> str | None:
         return str(candidate.resolve())
 
     return source
+
+
+def _summary_service_cfg(cfg: MemSearchConfig) -> tuple[str, int]:
+    """Resolve client-facing summary service settings."""
+    return cfg.summary_service.url, cfg.summary_service.timeout_ms
+
+
+def _payload_memory_file(payload: dict) -> str:
+    memory_file = payload.get("memory_file", "")
+    if not memory_file:
+        raise click.ClickException("payload must include memory_file")
+    return memory_file
+
+
+def _flush_pending_jobs(memory_file: str, service_url: str, timeout_ms: int) -> int:
+    """Flush queued summary jobs for the current project."""
+    spool_dir = derive_spool_dir(memory_file)
+    pending_dir = spool_dir / "pending"
+    flushed = 0
+
+    if not pending_dir.exists():
+        return 0
+
+    for pending in sorted(pending_dir.glob("*.json")):
+        payload = load_json(pending)
+        if not payload:
+            pending.unlink(missing_ok=True)
+            continue
+
+        job_id = canonical_job_id(payload)
+        _, done_path = job_paths(spool_dir, job_id)
+        if done_path.exists():
+            pending.unlink(missing_ok=True)
+            continue
+
+        try:
+            result = post_turn_summary(service_url, payload, timeout_ms)
+            summary = (result.get("summary") or "").strip()
+            if not summary:
+                continue
+            append_summary_entry(payload.get("memory_file") or memory_file, payload, summary)
+            mark_job_done(spool_dir, payload, summary)
+            pending.unlink(missing_ok=True)
+            flushed += 1
+        except Exception:
+            continue
+
+    return flushed
 
 
 # -- Common CLI options --
@@ -676,6 +736,74 @@ def reset(
             store.close()
 
 
+@cli.command()
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind address for the summary service.")
+@click.option("--port", default=37777, show_default=True, type=int, help="Port for the summary service.")
+@click.option(
+    "--spool-dir",
+    default=None,
+    type=click.Path(),
+    help="Directory used to persist queued summary jobs.",
+)
+def serve(host: str, port: int, spool_dir: str | None) -> None:
+    """Run the centralized turn-summarization service."""
+    cfg = resolve_config()
+    default_spool = Path.home() / ".memsearch" / "summary-jobs"
+    serve_summary_service(host, port, spool_dir or default_spool, cfg=cfg)
+
+
+@cli.command("flush-turns")
+@click.argument("memory_file", type=click.Path())
+@click.option("--service-url", default=None, help="Override summary service URL.")
+@click.option("--timeout-ms", default=None, type=int, help="HTTP timeout when talking to the service.")
+def flush_turns(memory_file: str, service_url: str | None, timeout_ms: int | None) -> None:
+    """Flush any queued turn summaries for a project."""
+    cfg = resolve_config()
+    eff_url, eff_timeout = _summary_service_cfg(cfg)
+    flushed = _flush_pending_jobs(
+        memory_file,
+        service_url or eff_url,
+        timeout_ms or eff_timeout,
+    )
+    click.echo(f"Flushed {flushed} queued turn(s).")
+
+
+@cli.command("submit-turn")
+@click.argument("payload_file", type=click.Path(exists=True))
+@click.option("--service-url", default=None, help="Override summary service URL.")
+@click.option("--timeout-ms", default=None, type=int, help="HTTP timeout when talking to the service.")
+def submit_turn(payload_file: str, service_url: str | None, timeout_ms: int | None) -> None:
+    """Submit one captured turn for centralized summarization."""
+    cfg = resolve_config()
+    eff_url, eff_timeout = _summary_service_cfg(cfg)
+    payload = load_payload(payload_file)
+    memory_file = _payload_memory_file(payload)
+    spool_dir = derive_spool_dir(memory_file)
+    job_id = canonical_job_id(payload)
+    pending_path, done_path = job_paths(spool_dir, job_id)
+
+    # Drain any backlog for the same project first.
+    _flush_pending_jobs(memory_file, service_url or eff_url, timeout_ms or eff_timeout)
+
+    if done_path.exists():
+        pending_path.unlink(missing_ok=True)
+        click.echo("Already summarized.")
+        return
+
+    try:
+        result = post_turn_summary(service_url or eff_url, payload, timeout_ms or eff_timeout)
+        summary = (result.get("summary") or "").strip()
+        if not summary:
+            raise RuntimeError("empty summary returned by service")
+        append_summary_entry(memory_file, payload, summary)
+        mark_job_done(spool_dir, payload, summary)
+        pending_path.unlink(missing_ok=True)
+        click.echo("Turn summarized and stored.")
+    except Exception as exc:
+        write_pending_job(spool_dir, payload)
+        click.echo(f"Queued turn for retry: {exc}", err=True)
+
+
 # ======================================================================
 # Config command group
 # ======================================================================
@@ -797,6 +925,19 @@ def config_init(project: bool) -> None:
     result["llm"]["api_key"] = click.prompt(
         "  API key (empty for env default, or env:VAR_NAME)",
         default=current.llm.api_key,
+    )
+
+    # Summary service
+    click.echo("\n── Summary Service ──")
+    result["summary_service"] = {}
+    result["summary_service"]["url"] = click.prompt(
+        "  Service URL",
+        default=current.summary_service.url,
+    )
+    result["summary_service"]["timeout_ms"] = click.prompt(
+        "  HTTP timeout (ms)",
+        default=current.summary_service.timeout_ms,
+        type=int,
     )
 
     # Prompts

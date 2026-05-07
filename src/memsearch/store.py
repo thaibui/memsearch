@@ -134,6 +134,12 @@ class MilvusStore:
             collection_name=self._collection,
             data=chunks,
         )
+        try:
+            self._client.flush(collection_name=self._collection)
+        except Exception:
+            # Best-effort: some backends expose eventual visibility without an
+            # explicit flush, and older clients may not implement flush.
+            pass
         return result.get("upsert_count", len(chunks)) if isinstance(result, dict) else len(chunks)
 
     def search(

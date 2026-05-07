@@ -6,7 +6,7 @@
 |-------|-------------------|
 | **Plugin loads** | Detects memsearch CLI, derives collection name, ensures default ONNX config |
 | **Session starts** | Starts capture daemon and runs initial index |
-| **Conversation continues** | Capture daemon polls SQLite for new turns, summarizes, saves to `.md`, re-indexes |
+| **Conversation continues** | Capture daemon polls SQLite for new turns, submits them to `memsearch serve`, saves the returned summary to `.md`, re-indexes |
 | **LLM needs history** | Calls `memory_search`, `memory_get`, or `memory_transcript` tools |
 
 ---
@@ -17,8 +17,9 @@
 graph TB
     subgraph "Capture"
         SQLITE[("OpenCode SQLite<br/>~/.local/share/opencode/opencode.db")] --> DAEMON["capture-daemon.py<br/>(background poller, 10s interval)"]
-        DAEMON --> SUMMARIZE["opencode run<br/>(isolated XDG_CONFIG_HOME)"]
-        SUMMARIZE --> MD["memory/YYYY-MM-DD.md"]
+        DAEMON --> SERVICE["memsearch submit-turn<br/>(shared summary service)"]
+        SERVICE --> SUMMARY["summary markdown"]
+        SUMMARY --> MD["memory/YYYY-MM-DD.md"]
     end
 
     subgraph "Index"
@@ -57,7 +58,7 @@ OpenCode stores all conversations in a SQLite database (`~/.local/share/opencode
 sequenceDiagram
     participant DB as OpenCode SQLite
     participant Daemon as capture-daemon.py
-    participant LLM as opencode run
+    participant LLM as memsearch serve
     participant File as YYYY-MM-DD.md
     participant Index as memsearch index
 
@@ -66,8 +67,8 @@ sequenceDiagram
         DB->>Daemon: Messages newer than last_msg_time
         alt New turns found
             Daemon->>Daemon: Group into user+assistant pairs
-            Daemon->>LLM: Summarize turn (isolated config)
-            LLM->>Daemon: 2-6 bullet points
+            Daemon->>Service: memsearch submit-turn
+            Service->>Daemon: 2-6 bullet points
             Daemon->>File: Append with session anchor
             Daemon->>Daemon: Update last_msg_time (persist to disk)
             Daemon->>Index: memsearch index (background)
@@ -80,29 +81,10 @@ Step by step:
 1. **Poll SQLite** -- queries the `session` and `message` tables for the current project directory, looking for messages newer than `last_msg_time`
 2. **Group into turns** -- pairs consecutive `user` + `assistant` messages into turns
 3. **Extract text** -- reads message `parts` (text content, tool calls with names/paths) into a readable format
-4. **Summarize** -- calls `opencode run` with the turn text and a third-person summarization prompt
-5. **Write to memory** -- appends the summary to `.memsearch/memory/YYYY-MM-DD.md` with `<!-- session:ID db:PATH -->` anchors
+4. **Summarize** -- calls `memsearch submit-turn` with the turn payload so the shared service performs the LLM work once for all clients
+5. **Write to memory** -- appends the returned summary to `.memsearch/memory/YYYY-MM-DD.md` with `<!-- session:ID db:PATH -->` anchors
 6. **Persist state** -- writes `last_msg_time` to `.memsearch/.last_msg_time` so restarts don't re-capture
 7. **Re-index** -- triggers `memsearch index` in the background
-
-### LLM Summarization with Isolation
-
-The daemon summarizes turns via `opencode run` -- but it must avoid triggering the memsearch plugin recursively. It achieves this with **XDG isolation**:
-
-```python
-result = subprocess.run(
-    ["opencode", "run", "-m", small_model, prompt],
-    env={
-        "XDG_CONFIG_HOME": "/tmp/opencode-memsearch-summarize",
-        "XDG_DATA_HOME": "/tmp/opencode-memsearch-summarize/data",
-        "MEMSEARCH_NO_WATCH": "1",
-    },
-)
-```
-
-The isolated `XDG_CONFIG_HOME` contains a copy of `opencode.json` (for provider/model config) but **no `plugins/` directory** -- so the memsearch plugin doesn't load in the summarization subprocess. The `MEMSEARCH_NO_WATCH` env var provides an additional guard.
-
-The daemon also reads `small_model` from `opencode.json` config, using a lighter model for summarization when available.
 
 ### Daemon Self-Management
 
@@ -162,7 +144,7 @@ The `<!-- session:... db:~/.local/share/opencode/opencode.db -->` anchors are us
 | Aspect | OpenCode | Claude Code | OpenClaw | Codex |
 |--------|----------|-------------|----------|-------|
 | **Capture** | SQLite daemon (polling) | Stop hook (event-driven) | agent_end hook (event-driven) | Stop hook (event-driven) |
-| **Summarizer** | `opencode run` (isolated) | `claude -p --model haiku` | `openclaw agent --local` | `codex exec` (isolated) |
+| **Summarizer** | `memsearch serve` (shared service) | `claude -p --model haiku` | `openclaw agent --local` | `memsearch serve` (shared service) |
 | **L3 source** | OpenCode SQLite DB | Claude Code JSONL | OpenClaw JSONL | Codex rollout JSONL |
 | **Recall trigger** | Tool-based (LLM decides) | Skill in forked subagent (`context: fork`) | Tool-based (LLM decides) | Skill-based (main context) |
 | **Install** | npm + opencode.json | Plugin marketplace | `openclaw plugins install` | `install.sh` + hooks.json |
@@ -189,7 +171,7 @@ plugins/opencode/
 | File | Purpose |
 |------|---------|
 | `index.ts` | Main plugin. Registers 3 tools and daemon lifecycle management |
-| `capture-daemon.py` | Background Python daemon. Polls OpenCode's SQLite, summarizes turns via `opencode run`, writes to daily `.md`, triggers re-indexing |
+| `capture-daemon.py` | Background Python daemon. Polls OpenCode's SQLite, submits turns to the shared summary service, writes to daily `.md`, triggers re-indexing |
 | `parse-transcript.py` | SQLite session reader for L3 drill-down. Reads original messages from OpenCode's database by session ID |
 | `derive-collection.sh` | Generates deterministic per-project Milvus collection names from project paths |
 | `install.sh` | Installation script: symlinks plugin, copies skill to `~/.agents/skills/`, installs dependencies |

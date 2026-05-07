@@ -26,7 +26,7 @@ GLOBAL_CONFIG_PATH = Path("~/.memsearch/config.toml").expanduser()
 PROJECT_CONFIG_PATH = Path(".memsearch.toml")
 
 # Fields that should be parsed as int when set via CLI strings
-_INT_FIELDS = {"max_chunk_size", "overlap_lines", "debounce_ms", "batch_size"}
+_INT_FIELDS = {"max_chunk_size", "overlap_lines", "debounce_ms", "batch_size", "timeout_ms"}
 
 
 @dataclass
@@ -97,6 +97,14 @@ class PromptsConfig:
 
 
 @dataclass
+class SummaryServiceConfig:
+    """Client-side settings for the shared turn summarization service."""
+
+    url: str = "http://127.0.0.1:37777"
+    timeout_ms: int = 120000
+
+
+@dataclass
 class MemSearchConfig:
     milvus: MilvusConfig = field(default_factory=MilvusConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
@@ -106,6 +114,7 @@ class MemSearchConfig:
     reranker: RerankerConfig = field(default_factory=RerankerConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     prompts: PromptsConfig = field(default_factory=PromptsConfig)
+    summary_service: SummaryServiceConfig = field(default_factory=SummaryServiceConfig)
 
 
 # -- Section name → dataclass mapping for typed reconstruction --
@@ -118,6 +127,7 @@ _SECTION_CLASSES: dict[str, type] = {
     "reranker": RerankerConfig,
     "llm": LLMConfig,
     "prompts": PromptsConfig,
+    "summary_service": SummaryServiceConfig,
 }
 
 

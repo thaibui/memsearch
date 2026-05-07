@@ -132,6 +132,6 @@ Pure dense vector search finds semantically similar content but can miss results
 cat .memsearch/.capture.pid && kill -0 $(cat .memsearch/.capture.pid) 2>/dev/null && echo "running" || echo "not running"
 ```
 
-**Let the LLM decide.** The cold-start context injection and tool descriptions give the LLM enough information to invoke memory tools autonomously. You don't need to explicitly ask it to search memory.
+**Let the LLM decide.** The tool descriptions give the LLM enough information to invoke memory tools autonomously. You don't need to explicitly ask it to search memory unless you want an explicit recall step.
 
 **Check project matching.** The daemon matches sessions by project directory. If memories are missing, verify that OpenCode is using the expected `directory` field in its SQLite sessions.

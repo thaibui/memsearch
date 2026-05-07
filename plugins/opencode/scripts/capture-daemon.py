@@ -5,10 +5,8 @@ Usage:
   capture-daemon.py <project_dir> <collection_name> [--memsearch-cmd CMD]
 
 The daemon polls the OpenCode SQLite database for new completed messages,
-extracts the last turn, summarizes it as bullet points, and writes to
-<project_dir>/.memsearch/memory/YYYY-MM-DD.md.
-
-It also triggers memsearch indexing after writing.
+extracts the last turn, and hands it to the centralized memsearch
+summary service via the local `memsearch submit-turn` command.
 """
 
 import sqlite3
@@ -16,107 +14,39 @@ import json
 import sys
 import os
 import time
-import shutil
 import subprocess
 import argparse
 import signal
+import shlex
 from datetime import datetime
 from pathlib import Path
 
 
-def get_small_model():
-    """Read small_model from opencode.json config (fallback to model, then empty)."""
-    config_paths = [
-        os.path.expanduser("~/.config/opencode/opencode.json"),
-        "opencode.json",
-    ]
-    for p in config_paths:
-        if os.path.exists(p):
-            try:
-                with open(p) as f:
-                    cfg = json.load(f)
-                return cfg.get("small_model", cfg.get("model", ""))
-            except Exception:
-                pass
-    return ""
+def submit_turn_to_service(payload, memsearch_cmd=None):
+    """Submit one turn to the centralized memsearch service."""
+    if not memsearch_cmd:
+        return False
 
-
-def ensure_isolated_config():
-    """Create isolated config dir without plugins/ to prevent recursion."""
-    isolated = "/tmp/opencode-memsearch-summarize/opencode"
-    os.makedirs(isolated, exist_ok=True)
-    # Copy opencode.json (provider config) but NOT plugins/
-    src = os.path.expanduser("~/.config/opencode/opencode.json")
-    dst = os.path.join(isolated, "opencode.json")
-    if os.path.exists(src) and not os.path.exists(dst):
-        shutil.copy2(src, dst)
-    return os.path.dirname(isolated)  # /tmp/opencode-memsearch-summarize
-
-
-def _load_summarize_prompt(agent_name, memsearch_cmd=None):
-    """Load summarization prompt: user custom > plugin built-in > inline fallback."""
-    # Try user-custom prompt via config
-    if memsearch_cmd:
-        try:
-            result = subprocess.run(
-                memsearch_cmd.split() + ["config", "get", "prompts.summarize"],
-                capture_output=True, text=True, timeout=5,
-            )
-            custom_path = result.stdout.strip()
-            if custom_path and os.path.isfile(custom_path):
-                template = Path(custom_path).read_text(encoding="utf-8")
-                return template.replace("{{AGENT_NAME}}", agent_name)
-        except Exception:
-            pass
-
-    # Plugin built-in template
-    builtin = Path(__file__).resolve().parent.parent / "prompts" / "summarize.txt"
-    if builtin.is_file():
-        template = builtin.read_text(encoding="utf-8")
-        return template.replace("{{AGENT_NAME}}", agent_name)
-
-    # Inline fallback
-    return (
-        "You are a third-person note-taker. Summarize the transcript as "
-        "2-6 bullet points. Write in third person. Output ONLY bullet points."
-    )
-
-
-def summarize_with_llm(turn_text, small_model, memsearch_cmd=None):
-    """Summarize using opencode run in isolated env (no plugins -> no recursion)."""
-    system_prompt = _load_summarize_prompt("OpenCode", memsearch_cmd)
-    full_prompt = (
-        f"{system_prompt}\n\n"
-        f"Transcript:\n{turn_text}"
-    )
-    isolated_dir = ensure_isolated_config()
-
-    cmd = ["opencode", "run"]
-    if small_model:
-        cmd += ["-m", small_model]
-    cmd.append(full_prompt)
-
+    payload_path = os.path.join("/tmp", f"memsearch-opencode-{payload['session_id']}-{payload['turn_id']}.json")
     try:
+        with open(payload_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+        cmd = shlex.split(memsearch_cmd) + ["submit-turn", payload_path]
         result = subprocess.run(
             cmd,
-            env={
-                **os.environ,
-                "XDG_CONFIG_HOME": isolated_dir,
-                "XDG_DATA_HOME": os.path.join(isolated_dir, "data"),
-                "MEMSEARCH_NO_WATCH": "1",
-            },
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
-        output = result.stdout.strip()
-        # Extract bullet points (skip any opencode run header lines)
-        lines = output.split("\n")
-        bullets = [l for l in lines if l.strip().startswith("- ")]
-        if bullets:
-            return "\n".join(bullets)
+        return result.returncode == 0
     except Exception:
-        pass
-
-    return None  # fallback to raw text
+        return False
+    finally:
+        try:
+            os.remove(payload_path)
+        except OSError:
+            pass
 
 
 def get_db_path():
@@ -282,7 +212,6 @@ def main():
     signal.signal(signal.SIGTERM, cleanup)
     signal.signal(signal.SIGINT, cleanup)
 
-    small_model = get_small_model()
     # Track by message time — persisted to disk so daemon restarts don't re-capture
     state_file = os.path.join(args.project_dir, ".memsearch", ".last_msg_time")
     last_msg_time = 0
@@ -294,14 +223,29 @@ def main():
 
     while True:
         try:
+            current_memory_file = os.path.join(memory_dir, f"{datetime.now():%Y-%m-%d}.md")
+            subprocess.run(
+                shlex.split(args.memsearch_cmd) + ["flush-turns", current_memory_file],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
             conn = sqlite3.connect(db_path, timeout=5)
 
             new_turns = get_new_completed_turns(conn, args.project_dir, last_msg_time)
             for session_id, turn_text, msg_time in new_turns:
                 if turn_text and len(turn_text) > 10:
-                    # Summarize with LLM, fallback to raw text
-                    summary = summarize_with_llm(turn_text, small_model, args.memsearch_cmd)
-                    write_capture(memory_dir, summary if summary else turn_text, session_id, db_path)
+                    payload = {
+                        "now": datetime.now().strftime("%H:%M"),
+                        "memory_file": current_memory_file,
+                        "platform": "opencode",
+                        "agent_name": "OpenCode",
+                        "session_id": session_id,
+                        "turn_id": str(msg_time),
+                        "db_path": db_path,
+                        "content": turn_text,
+                    }
+                    submit_turn_to_service(payload, args.memsearch_cmd)
                     if msg_time > last_msg_time:
                         last_msg_time = msg_time
                         try:
@@ -312,9 +256,12 @@ def main():
 
             if new_turns:
                 # Index in background after batch capture
-                os.system(
-                    f"{args.memsearch_cmd} index '{memory_dir}' "
-                    f"--collection {args.collection_name} &"
+                subprocess.Popen(
+                    shlex.split(args.memsearch_cmd)
+                    + ["index", memory_dir, "--collection", args.collection_name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
                 )
 
             conn.close()

@@ -71,7 +71,6 @@ install_dir = sys.argv[2]
 
 spec = {
     "SessionStart": {"script": "session-start.sh", "timeout": 30},
-    "UserPromptSubmit": {"script": "user-prompt-submit.sh", "timeout": 10},
     "Stop": {"script": "stop.sh", "timeout": 30},
 }
 
@@ -229,9 +228,8 @@ echo ""
 echo "The memsearch plugin is now configured for Codex CLI."
 echo ""
 echo "What happens automatically:"
-echo "  • SessionStart: indexes project memory, injects recent context"
+echo "  • SessionStart: indexes project memory and starts watch"
 echo "  • Stop: summarizes each turn and saves to memory"
-echo "  • UserPromptSubmit: reminds Codex about memory-recall skill"
 echo "  • memory-recall skill: search past memories when relevant"
 echo ""
 echo "Memory files:   <project>/.memsearch/memory/*.md"

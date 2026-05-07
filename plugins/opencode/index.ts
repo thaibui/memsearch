@@ -5,8 +5,6 @@
  * - memory_search tool: semantic search over past memories
  * - memory_get tool: expand a chunk to full context
  * - memory_transcript tool: parse original conversation from OpenCode SQLite
- * - experimental.chat.system.transform hook: inject recent memories as context
- *
  * Auto-capture is handled by a background Python daemon (capture-daemon.py)
  * that polls the OpenCode SQLite database for completed turns.
  */
@@ -65,46 +63,6 @@ function deriveCollectionName(projectDir: string): string {
   } catch {
     return "ms_opencode_default";
   }
-}
-
-/**
- * Summarize the N most recent daily .md files for cold-start context.
- * Extracts headings (## Session, ### turns) and bullet content from each
- * file so the agent sees the structure of past days (what sessions existed,
- * what topics came up), not just the tail of whichever file is newest.
- */
-function getRecentMemories(
-  memDir: string,
-  count = 2,
-  maxLinesPerFile = 30
-): string {
-  if (!existsSync(memDir)) return "";
-
-  const files = readdirSync(memDir)
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .slice(-count);
-
-  if (files.length === 0) return "";
-
-  const summary: string[] = [];
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(memDir, file), "utf-8");
-      const lines = content.split("\n")
-        .filter((l) => /^#{2,4}\s/.test(l) || l.startsWith("- ") || l.startsWith("[Human]") || l.startsWith("[Assistant]"))
-        .slice(0, maxLinesPerFile);
-      if (lines.length > 0) {
-        summary.push(`[${file}]`, ...lines);
-      }
-    } catch { /* skip */ }
-  }
-
-  if (summary.length === 0) {
-    return `You have ${files.length} past memory file(s). Use the memory_search tool when the user's question could benefit from historical context.`;
-  }
-
-  return `Recent memories (use memory_search for full search):\n${summary.join("\n")}`;
 }
 
 /** Shell-escape a string for safe use inside single quotes. */
@@ -310,21 +268,6 @@ const MemsearchPlugin: Plugin = async ({ project, directory, worktree }) => {
       }),
     },
 
-    // ----- Hook: system prompt transform — inject recent memories -----
-    ...(autoRecall
-      ? {
-          "experimental.chat.system.transform": async (_input: any, output: any) => {
-            try {
-              const context = getRecentMemories(memoryDir);
-              if (context) {
-                output.system.push(
-                  `[memsearch] Memory available. You have access to memory_search, memory_get, and memory_transcript tools for recalling past sessions.\n\n${context}`
-                );
-              }
-            } catch { /* ignore */ }
-          },
-        }
-      : {}),
   };
 };
 

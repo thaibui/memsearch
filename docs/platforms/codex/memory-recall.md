@@ -1,12 +1,11 @@
 # Memory Recall
 
-The `$memory-recall` skill provides semantic search over past sessions. Codex can invoke it automatically when it judges historical context would help, or you can trigger it manually.
+The `$memory-recall` skill provides semantic search over past sessions. Memory recall is explicit: trigger it manually when you want historical context.
 
 ---
 
 ## Invoking the Skill
 
-- **Automatically**: Codex decides when past context would help, based on the `UserPromptSubmit` hint and skill description
 - **Manually**: `$memory-recall <your query>`
 
 ### Manual Example

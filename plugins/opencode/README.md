@@ -7,7 +7,6 @@ Semantic memory search for [OpenCode](https://github.com/anomalyco/opencode) —
 - **Auto-capture**: Summarizes each conversation turn and saves to daily `.md` files
 - **Semantic search**: Hybrid search (BM25 + dense vectors + RRF) via Milvus
 - **Three-layer recall**: Search → Expand → Transcript (progressive detail)
-- **Cold-start context**: Injects recent memories into new sessions automatically
 - **Per-project isolation**: Each project gets its own Milvus collection
 - **ONNX embeddings**: CPU-only bge-m3 model, no API key required
 
@@ -67,7 +66,6 @@ OpenCode Session
     │                                     │
     │                                     └── memsearch index (background)
     │
-    ├── system.transform hook ──→ Inject recent memories
     │
     └── Tools
         ├── memory_search ──→ memsearch search (hybrid BM25+dense)
@@ -151,7 +149,6 @@ export OPENAI_API_KEY=sk-...
 
 3. **Recall**: When the assistant needs historical context, it calls `memory_search` to find relevant chunks. Results can be expanded with `memory_get` or drilled into with `memory_transcript`.
 
-4. **Cold-start**: At session start, recent memory bullets are injected into the system prompt so the assistant has immediate context.
 
 ## Differences from Other Plugins
 
@@ -160,5 +157,5 @@ export OPENAI_API_KEY=sk-...
 | Session storage | JSONL | SQLite | JSONL |
 | Hook system | Shell scripts | TypeScript hooks | JS API |
 | Summarizer | claude -p --model haiku | opencode prompt | openclaw agent |
-| Context injection | SessionStart hook | system.transform | before_agent_start |
+| Context injection | None | None | None |
 | Skill context | context: fork | N/A (no fork) | N/A |

@@ -4,8 +4,8 @@
 
 | Event | What memsearch does |
 |-------|-------------------|
-| **Session starts** | Clean up orphaned processes, start watch (Server) or one-time index (Lite), write session heading, inject recent memories, check for updates |
-| **Each prompt** | Memory-recall skill hint displayed via `systemMessage` |
+| **Session starts** | Clean up orphaned processes, start watch (Server) or one-time index (Lite), write session heading, check for updates |
+| **Each prompt** | No injected hint; memory recall stays explicit |
 | **Each turn ends** | Conversation summarized via `codex exec` (async) and saved to daily `.md` |
 
 ---
@@ -16,8 +16,7 @@ The Codex plugin uses 3 shell hooks (Codex does not have a `SessionEnd` hook):
 
 | Hook | Type | Async | Timeout | What It Does |
 |------|------|-------|---------|-------------|
-| **SessionStart** | command | no | 30s | Cleanup orphans, bootstrap memsearch, start watch/index, write session heading, inject memories, display status |
-| **UserPromptSubmit** | command | no | 10s | Return `systemMessage` hint "[memsearch] Memory available" |
+| **SessionStart** | command | no | 30s | Cleanup orphans, bootstrap memsearch, start watch/index, write session heading |
 | **Stop** | command | **yes** | 30s | Summarize the last turn via `codex exec`, using a rollout transcript when available and `history.jsonl` + `last_assistant_message` otherwise |
 
 ### Hook Lifecycle
@@ -33,9 +32,8 @@ stateDiagram-v2
 
     state Prompting {
         [*] --> UserInput
-        UserInput --> Hint: UserPromptSubmit hook
-        Hint --> CodexProcesses: "[memsearch] Memory available"
-        CodexProcesses --> MemoryRecall: needs context?
+        UserInput --> CodexProcesses: needs context?
+        CodexProcesses --> MemoryRecall: explicit $memory-recall
         MemoryRecall --> SkillRun: $memory-recall skill
         SkillRun --> CodexResponds: search + expand results
         CodexProcesses --> CodexResponds: no memory needed
@@ -55,7 +53,7 @@ stateDiagram-v2
 
 ---
 
-## SessionStart -- Bootstrap and Inject
+## SessionStart -- Bootstrap and Maintain
 
 The SessionStart hook handles several Codex-specific concerns:
 
@@ -69,9 +67,7 @@ The SessionStart hook handles several Codex-specific concerns:
     - **Server mode** (`http://` or `tcp://` URI): starts `memsearch watch` as a persistent background process via `setsid`
     - **Lite mode** (local `.db` file): runs a one-time `memsearch index` in a background subshell (watch would fail due to Milvus Lite's file lock)
 
-5. **Cold-start injection** -- injects memory file count and date range as `additionalContext`, with a hint to use `$memory-recall`.
-
-6. **Update check** -- queries PyPI (2s timeout) and shows update banner if newer version exists.
+5. **Update check** -- queries PyPI (2s timeout) and shows update banner if newer version exists.
 
 ### Milvus Lite Lock Handling
 
@@ -168,18 +164,6 @@ Codex CLI uses a `hooks.json` file (at `~/.codex/hooks.json`) to define hook scr
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash /path/to/plugins/codex/hooks/user-prompt-submit.sh",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "matcher": "",
@@ -265,9 +249,8 @@ When the `rollout:` anchor is populated, the memory-recall skill can use `parse-
 plugins/codex/
 ├── hooks/
 │   ├── common.sh                   # Shared setup: JSON helpers, process management, orphan cleanup
-│   ├── session-start.sh            # SessionStart: bootstrap, watch/index, cold-start injection
+│   ├── session-start.sh            # SessionStart: bootstrap, watch/index
 │   ├── stop.sh                     # Stop: async capture via codex exec, local fallback
-│   └── user-prompt-submit.sh       # UserPromptSubmit: memory availability hint
 ├── skills/
 │   └── memory-recall/
 │       └── SKILL.md                # Memory recall skill ($memory-recall)
@@ -280,9 +263,8 @@ plugins/codex/
 | File | Purpose |
 |------|---------|
 | `common.sh` | Shared library sourced by all hooks. Includes JSON helpers (`_json_val`, `_json_encode_str`), memsearch detection, watch/index singleton management, and `cleanup_orphaned_processes()` for Codex's missing SessionEnd. |
-| `session-start.sh` | Bootstrap memsearch, start watch (Server) or one-time index (Lite), write session heading, inject cold-start context, check for updates. |
+| `session-start.sh` | Bootstrap memsearch, start watch (Server) or one-time index (Lite), write session heading, check for updates. |
 | `stop.sh` | Async capture: summarize via `codex exec` with hooks disabled, using `parse-rollout.sh` when Codex provides a rollout path and `history.jsonl` + `last_assistant_message` otherwise. Falls back to raw text if `codex exec` fails. |
-| `user-prompt-submit.sh` | Return lightweight `systemMessage` hint about memory availability. |
 | `SKILL.md` | Memory recall skill with `__INSTALL_DIR__` placeholder (resolved at install time). Includes direct file read fallback for L2 in case `memsearch expand` hits sandbox restrictions. |
 | `install.sh` | One-click installer: checks/installs memsearch, copies the skill, installs or updates memsearch hook entries in `hooks.json`, and enables the experimental hooks feature flag. |
 | `parse-rollout.sh` | Parses Codex rollout JSONL files, extracting the last user message through EOF with role labels. |

@@ -78,7 +78,6 @@ elif skill_dir.exists():
 hooks_file = Path.home() / ".codex/hooks.json"
 markers = {
     "SessionStart": "plugins/codex/hooks/session-start.sh",
-    "UserPromptSubmit": "plugins/codex/hooks/user-prompt-submit.sh",
     "Stop": "plugins/codex/hooks/stop.sh",
 }
 

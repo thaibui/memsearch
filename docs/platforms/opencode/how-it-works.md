@@ -5,7 +5,7 @@
 | Event | What memsearch does |
 |-------|-------------------|
 | **Plugin loads** | Detects memsearch CLI, derives collection name, ensures default ONNX config |
-| **Session starts** | Starts capture daemon, runs initial index, injects recent memories via `system.transform` |
+| **Session starts** | Starts capture daemon and runs initial index |
 | **Conversation continues** | Capture daemon polls SQLite for new turns, summarizes, saves to `.md`, re-indexes |
 | **LLM needs history** | Calls `memory_search`, `memory_get`, or `memory_transcript` tools |
 
@@ -29,10 +29,6 @@ graph TB
     subgraph "Recall"
         TOOLS["memory_search<br/>memory_get<br/>memory_transcript"] --> MIL
         TOOLS --> SQLITE
-    end
-
-    subgraph "Cold Start"
-        INJECT["system.transform hook"] --> RECENT["Recent memories<br/>injected into system prompt"]
     end
 
     style SQLITE fill:#2a3a5c,stroke:#d66b6b,color:#a8b2c1
@@ -117,29 +113,6 @@ The daemon also reads `small_model` from `opencode.json` config, using a lighter
 
 ---
 
-## Cold-Start Context
-
-On session start, the `experimental.chat.system.transform` hook injects recent memories into the system prompt:
-
-```typescript
-"experimental.chat.system.transform": async (_input, output) => {
-  const context = getRecentMemories(memoryDir);
-  if (context) {
-    output.system.push(
-      `[memsearch] Memory available. You have access to memory_search, ` +
-      `memory_get, and memory_transcript tools for recalling past sessions.\n\n${context}`
-    );
-  }
-}
-```
-
-This reads the last 15 lines from the 2 most recent daily `.md` files, extracting bullet points and role-labeled lines. The injected context serves two purposes:
-
-1. **Immediate awareness** -- the LLM knows what happened recently without needing to search
-2. **Tool discovery** -- the message explicitly tells the LLM about the available memory tools
-
----
-
 ## Memory Files
 
 ```
@@ -215,7 +188,7 @@ plugins/opencode/
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Main plugin. Registers 3 tools, system.transform hook, daemon lifecycle management |
+| `index.ts` | Main plugin. Registers 3 tools and daemon lifecycle management |
 | `capture-daemon.py` | Background Python daemon. Polls OpenCode's SQLite, summarizes turns via `opencode run`, writes to daily `.md`, triggers re-indexing |
 | `parse-transcript.py` | SQLite session reader for L3 drill-down. Reads original messages from OpenCode's database by session ID |
 | `derive-collection.sh` | Generates deterministic per-project Milvus collection names from project paths |

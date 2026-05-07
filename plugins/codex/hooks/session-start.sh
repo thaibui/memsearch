@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SessionStart hook: clean up orphans, start watch singleton, inject recent memory context.
+# SessionStart hook: clean up orphans, start watch singleton, and maintain memory files.
 # Codex-specific: no SessionEnd counterpart.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -107,10 +107,10 @@ if [ ! -f "$MEMORY_FILE" ] || ! grep -qF "## Session $NOW" "$MEMORY_FILE"; then
   echo -e "\n## Session $NOW\n" >> "$MEMORY_FILE"
 fi
 
-# If API key is missing, show status and exit early (watch/search would fail)
+# If API key is missing, exit quietly. Capture/search would fail, but the
+# hook does not inject prompt text.
 if [ "$KEY_MISSING" = true ]; then
-  json_status=$(_json_encode_str "$status")
-  echo "{\"systemMessage\": $json_status}"
+  echo '{}'
   exit 0
 fi
 
@@ -136,30 +136,4 @@ if [[ "$MILVUS_URI" != http* ]] && [[ "$MILVUS_URI" != tcp* ]]; then
   echo $! > "$INDEX_PIDFILE"
 fi
 
-# Always include status in systemMessage
-json_status=$(_json_encode_str "$status")
-
-# If memory dir has no .md files, nothing to inject
-if [ ! -d "$MEMORY_DIR" ] || ! ls "$MEMORY_DIR"/*.md &>/dev/null; then
-  echo "{\"systemMessage\": $json_status}"
-  exit 0
-fi
-
-context=""
-
-# Count only preexisting memory entries for the hint.
-# Do not treat the just-created session heading as past memory.
-if [ "$EXISTING_MEMORY_COUNT" -gt 0 ]; then
-  oldest_path=$(printf '%s\n' "$EXISTING_MEMORY_FILES" | sed -n '1p')
-  newest_path=$(printf '%s\n' "$EXISTING_MEMORY_FILES" | tail -1)
-  oldest=$(basename "$oldest_path" .md 2>/dev/null || true)
-  newest=$(basename "$newest_path" .md 2>/dev/null || true)
-  context="You have ${EXISTING_MEMORY_COUNT} past memory file(s) (${oldest} to ${newest}). Use \$memory-recall to search when the user's question could benefit from historical context."
-fi
-
-if [ -n "$context" ]; then
-  json_context=$(_json_encode_str "$context")
-  echo "{\"systemMessage\": $json_status, \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": $json_context}}"
-else
-  echo "{\"systemMessage\": $json_status}"
-fi
+echo '{}'

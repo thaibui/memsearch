@@ -45,7 +45,7 @@ memsearch search "test" --collection test_warmup 2>/dev/null; memsearch reset --
 | When | What |
 |------|------|
 | Session starts | Recent memory context is injected; you'll see `[memsearch v...]` in the status line |
-| Each prompt | A `[memsearch] Memory available` hint reminds Codex that memory-recall is available |
+| Each prompt | No injected hint; memory recall remains explicit |
 | Each turn ends | The conversation is summarized and saved to a daily `.md` file |
 
 ### Search past memories

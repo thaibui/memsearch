@@ -154,7 +154,10 @@ class SummaryServiceRuntime:
             job.pending_path.unlink(missing_ok=True)
         except Exception:
             pass
-        append_summary_entry(job.payload["memory_file"], job.payload, summary)
+        try:
+            append_summary_entry(job.payload["memory_file"], job.payload, summary)
+        except OSError:
+            pass  # Best-effort: agent hooks handle their own memory file writes
         return result
 
     def _worker_loop(self) -> None:
